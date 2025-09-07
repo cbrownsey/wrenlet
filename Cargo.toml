@@ -1,0 +1,7 @@
+[package]
+name = "wrenlet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wren-sys = { git = "https://github.com/cbrownsey/wren-sys.git" }
