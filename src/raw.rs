@@ -16,19 +16,6 @@ enum WrenType {
     Foreign,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-enum WrenValue {
-    #[default]
-    Null,
-    Bool(bool),
-    Num(f64),
-    String(*const [u8]),
-    List,
-    Map,
-    Foreign(*mut ()),
-    Unknown,
-}
-
 impl From<sys::WrenType> for WrenType {
     fn from(value: sys::WrenType) -> Self {
         match value {
