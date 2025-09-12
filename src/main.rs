@@ -1,4 +1,4 @@
-use wrenlet::Wren;
+use wrenlet::{Wren, value::Value};
 
 fn main() {
     let mut wren = Wren::new();
@@ -11,5 +11,5 @@ fn main() {
 
     wren.interpret("main", source).unwrap();
 
-    dbg!(wren.has_variable("main", "ab"));
+    dbg!(wren.get_variable::<Value<'_>>("main", "a").unwrap());
 }

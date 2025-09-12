@@ -22,6 +22,7 @@ impl Default for WrenBuilder {
 }
 
 impl WrenBuilder {
+    /// Creates a new, empty builder.
     pub fn new() -> WrenBuilder {
         WrenBuilder { user_data: () }
     }
@@ -39,7 +40,7 @@ impl<T> WrenBuilder<T> {
 
         let mut conf = MaybeUninit::uninit();
 
-        unsafe { wren_sys::wrenInitConfiguration(conf.as_mut_ptr()) };
+        unsafe { sys::wrenInitConfiguration(conf.as_mut_ptr()) };
 
         let mut conf = unsafe { conf.assume_init() };
 
@@ -60,7 +61,7 @@ impl<T> WrenBuilder<T> {
         }))
         .cast();
 
-        let vm = unsafe { wren_sys::wrenNewVM(&mut conf) };
+        let vm = unsafe { sys::wrenNewVM(&mut conf) };
 
         debug_assert!(!vm.is_null());
 
@@ -115,7 +116,7 @@ mod c_functions {
         }
     }
 
-    pub extern "C" fn write_fn(_vm: *mut wren_sys::WrenVM, text: *const i8) {
+    pub extern "C" fn write_fn(_vm: *mut sys::WrenVM, text: *const i8) {
         let text = unsafe { CStr::from_ptr(text) };
 
         let text = text.to_bytes();
@@ -124,8 +125,8 @@ mod c_functions {
     }
 
     pub extern "C" fn error_fn<T>(
-        vm: *mut wren_sys::WrenVM,
-        ty: wren_sys::WrenErrorType,
+        vm: *mut sys::WrenVM,
+        ty: sys::WrenErrorType,
         module: *const i8,
         line: i32,
         message: *const i8,
@@ -133,7 +134,7 @@ mod c_functions {
         let mut vm = unsafe { RawWren::from_ptr(vm) };
 
         match ty {
-            wren_sys::WrenErrorType::WREN_ERROR_COMPILE => {
+            sys::WrenErrorType::WREN_ERROR_COMPILE => {
                 assert!(!module.is_null());
                 assert!(!message.is_null());
 
@@ -146,7 +147,7 @@ mod c_functions {
 
                 unsafe { vm.set_compile_error(module, line, message) };
             }
-            wren_sys::WrenErrorType::WREN_ERROR_RUNTIME => {
+            sys::WrenErrorType::WREN_ERROR_RUNTIME => {
                 assert!(!message.is_null());
 
                 let message = unsafe { CStr::from_ptr(message) }
@@ -155,7 +156,7 @@ mod c_functions {
 
                 unsafe { vm.set_runtime_error(message) };
             }
-            wren_sys::WrenErrorType::WREN_ERROR_STACK_TRACE => {
+            sys::WrenErrorType::WREN_ERROR_STACK_TRACE => {
                 assert!(!module.is_null());
                 assert!(!message.is_null());
 
@@ -173,20 +174,20 @@ mod c_functions {
     }
 
     pub extern "C" fn bind_foreign_method_fn(
-        _vm: *mut wren_sys::WrenVM,
+        _vm: *mut sys::WrenVM,
         _module: *const i8,
         _class: *const i8,
         _is_static: bool,
         _signature: *const i8,
-    ) -> wren_sys::WrenForeignMethodFn {
+    ) -> sys::WrenForeignMethodFn {
         None
     }
 
     pub extern "C" fn bind_foreign_class_fn(
-        _vm: *mut wren_sys::WrenVM,
+        _vm: *mut sys::WrenVM,
         module: *const i8,
         class: *const i8,
-    ) -> wren_sys::WrenForeignClassMethods {
+    ) -> sys::WrenForeignClassMethods {
         let module = if !module.is_null() {
             Some(unsafe { CStr::from_ptr(module) })
         } else {
@@ -201,7 +202,7 @@ mod c_functions {
 
         dbg!(module, class);
 
-        wren_sys::WrenForeignClassMethods {
+        sys::WrenForeignClassMethods {
             allocate: None,
             finalize: None,
         }

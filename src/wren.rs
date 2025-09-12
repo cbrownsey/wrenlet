@@ -1,15 +1,14 @@
 use std::{
     alloc::Layout,
-    cell::{Cell, RefCell, UnsafeCell},
+    cell::{Cell, RefCell},
     ffi::{CStr, CString},
     marker::PhantomData,
     ptr::NonNull,
 };
-use wren_sys as sys;
 
 use crate::{
     WrenBuilder,
-    value::{FromWren, FromWrenError, Value},
+    value::{FromWren, FromWrenError, Value, ValueType},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +92,11 @@ impl Wren {
 }
 
 impl<U> Wren<U> {
+    /// Creates a new `Wren` virtual machine, with the associated user data.
+    pub fn new_with(user_data: U) -> Wren<U> {
+        Wren::builder().user_data(user_data).build()
+    }
+
     pub(crate) unsafe fn from_ptr(ptr: *mut sys::WrenVM) -> Wren<U> {
         Wren {
             raw: unsafe { RawWren::from_ptr(ptr) },
@@ -106,12 +110,11 @@ impl<U> Wren<U> {
         let module = CString::new(module).unwrap();
         let source = CString::new(source).unwrap();
 
-        let result =
-            unsafe { wren_sys::wrenInterpret(self.vm_ptr(), module.as_ptr(), source.as_ptr()) };
+        let result = unsafe { sys::wrenInterpret(self.vm_ptr(), module.as_ptr(), source.as_ptr()) };
 
         match result {
-            wren_sys::WrenInterpretResult::WREN_RESULT_SUCCESS => Ok(()),
-            wren_sys::WrenInterpretResult::WREN_RESULT_COMPILE_ERROR => {
+            sys::WrenInterpretResult::WREN_RESULT_SUCCESS => Ok(()),
+            sys::WrenInterpretResult::WREN_RESULT_COMPILE_ERROR => {
                 let Some(error) = self.raw.take_error() else {
                     panic!();
                 };
@@ -120,7 +123,7 @@ impl<U> Wren<U> {
 
                 Err(error)
             }
-            wren_sys::WrenInterpretResult::WREN_RESULT_RUNTIME_ERROR => {
+            sys::WrenInterpretResult::WREN_RESULT_RUNTIME_ERROR => {
                 let Some(error) = self.raw.take_error() else {
                     panic!()
                 };
@@ -158,15 +161,21 @@ impl<U> Wren<U> {
         self.raw.has_variable(&module, &variable)
     }
 
-    pub fn get_variable<'a, T: FromWren<'a>>(
-        &'a self,
-        module: &str,
-        variable: &str,
-    ) -> Result<T, Error> {
-        todo!()
+    /// Retrieves a variable from this `Wren` instance.
+    pub fn get_variable<'a, T>(&'a self, module: &str, variable: &str) -> Result<T, FromWrenError>
+    where
+        T: FromWren<'a>,
+    {
+        let module = CString::new(module).unwrap();
+        let variable = CString::new(variable).unwrap();
+
+        self.raw.get_variable(&module, &variable)
     }
 
-    pub(crate) fn vm_ptr(&self) -> *mut wren_sys::WrenVM {
+    /// Get the raw C pointer to the underlying [`WrenVM`].
+    ///
+    /// [`WrenVM`]: wren_sys::WrenVM
+    pub(crate) fn vm_ptr(&self) -> *mut sys::WrenVM {
         self.raw.vm_ptr()
     }
 
@@ -259,7 +268,7 @@ impl RawWren {
         }
     }
 
-    pub(crate) fn get_slot(&self, slot: usize) -> Option<Value<'_>> {
+    pub(crate) fn get_slot_type(&self, slot: usize) -> Option<ValueType> {
         if slot >= self.get_slot_count() {
             return None;
         }
@@ -267,29 +276,29 @@ impl RawWren {
         let slot = i32::try_from(slot).unwrap();
         let ty = unsafe { sys::wrenGetSlotType(self.vm_ptr(), slot) };
 
-        match ty {
-            sys::WrenType::WREN_TYPE_NULL => Some(Value::Null),
-            sys::WrenType::WREN_TYPE_BOOL => Some(Value::Bool(unsafe {
-                sys::wrenGetSlotBool(self.vm_ptr(), slot)
-            })),
-            sys::WrenType::WREN_TYPE_NUM => Some(Value::Num(unsafe {
-                sys::wrenGetSlotDouble(self.vm_ptr(), slot)
-            })),
-            sys::WrenType::WREN_TYPE_STRING => {
+        Some(ValueType::from(ty))
+    }
+
+    pub(crate) fn get_slot(&self, slot: usize) -> Option<Value<'_>> {
+        let s = i32::try_from(slot).unwrap();
+
+        Some(match self.get_slot_type(slot)? {
+            ValueType::Null => Value::Null,
+            ValueType::Bool => Value::Bool(unsafe { sys::wrenGetSlotBool(self.vm_ptr(), s) }),
+            ValueType::Num => Value::Num(unsafe { sys::wrenGetSlotDouble(self.vm_ptr(), s) }),
+            ValueType::String => {
                 let mut length = 0;
-                let bytes = unsafe { sys::wrenGetSlotBytes(self.vm_ptr(), slot, &mut length) };
+                let bytes = unsafe { sys::wrenGetSlotBytes(self.vm_ptr(), s, &mut length) };
+
                 let length = usize::try_from(length).unwrap();
 
-                Some(Value::String(unsafe {
-                    std::slice::from_raw_parts(bytes.cast::<u8>(), length)
-                }))
+                Value::String(unsafe { std::slice::from_raw_parts(bytes.cast::<u8>(), length) })
             }
-            sys::WrenType::WREN_TYPE_LIST => todo!(),
-            sys::WrenType::WREN_TYPE_MAP => todo!(),
-            sys::WrenType::WREN_TYPE_FOREIGN => todo!(),
-            sys::WrenType::WREN_TYPE_UNKNOWN => todo!(),
-            _ => unreachable!(),
-        }
+            ValueType::List => todo!(),
+            ValueType::Map => todo!(),
+            ValueType::Foreign => todo!(),
+            ValueType::Unknown => todo!(),
+        })
     }
 
     pub(crate) unsafe fn set_slot<'v>(&self, slot: usize, value: Value<'v>) {
