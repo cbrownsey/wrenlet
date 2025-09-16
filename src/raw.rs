@@ -4,7 +4,7 @@ const SLOT_FROM_USIZE_MSG: &str = "Attempted to get a slot index from an invalid
 
 /// The type of a value stored in a slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-enum WrenType {
+pub enum WrenType {
     #[default]
     Null,
     Bool,
@@ -34,7 +34,7 @@ impl From<sys::WrenType> for WrenType {
 
 /// The type of error encountered when interpreting a string of source code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum InterpretError {
+pub enum InterpretError {
     Compile = 1,
     Runtime,
 }
@@ -57,10 +57,10 @@ impl InterpretError {
 ///
 /// [`WrenVM`]: wren_sys::WrenVM
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct WrenPtr(NonNull<sys::WrenVM>);
+pub(crate) struct WrenPtr(NonNull<sys::WrenVM>);
 
 impl WrenPtr {
-    unsafe fn from_ptr_unchecked(ptr: *mut sys::WrenVM) -> WrenPtr {
+    pub unsafe fn from_raw(ptr: *mut sys::WrenVM) -> WrenPtr {
         WrenPtr(unsafe { NonNull::new_unchecked(ptr) })
     }
 
@@ -69,17 +69,17 @@ impl WrenPtr {
     /// # Safety
     /// This function may only be called if there are no other copies of this `WrenPtr`. This `WrenPtr` may not be used
     /// after this function is called.
-    unsafe fn free(&self) {
+    pub unsafe fn free(&self) {
         unsafe { sys::wrenFreeVM(self.0.as_ptr()) };
     }
 
     /// Immediately run the garbage collector to free unused allocations.
-    unsafe fn collect_garbage(&self) {
+    pub unsafe fn collect_garbage(&self) {
         unsafe { sys::wrenCollectGarbage(self.0.as_ptr()) };
     }
 
     /// Runs a string of Wren code in a new fiber in the context of the given module.
-    unsafe fn interpret(&self, module: &CStr, source: &CStr) -> Result<(), InterpretError> {
+    pub unsafe fn interpret(&self, module: &CStr, source: &CStr) -> Result<(), InterpretError> {
         let result =
             unsafe { sys::wrenInterpret(self.0.as_ptr(), module.as_ptr(), source.as_ptr()) };
 
@@ -90,7 +90,7 @@ impl WrenPtr {
     /// signature, using a reciever and arguments already set up on the stack.
     ///
     /// The returned handle should be released with [`WrenPtr::release_handle`].
-    fn make_call_handle(&self, signature: &CStr) -> HandlePtr {
+    pub fn make_call_handle(&self, signature: &CStr) -> HandlePtr {
         let ptr = unsafe { sys::wrenMakeCallHandle(self.0.as_ptr(), signature.as_ptr()) };
 
         debug_assert!(!ptr.is_null());
@@ -109,7 +109,7 @@ impl WrenPtr {
     /// [`WrenPtr::make_call_handle`] on an instance of this [`WrenPtr`]. The
     /// reciever to this function must be in slot zero, and the remaining
     /// arguments must be in the following slots.
-    unsafe fn call(&self, handle: HandlePtr) -> Result<(), InterpretError> {
+    pub unsafe fn call(&self, handle: HandlePtr) -> Result<(), InterpretError> {
         let result = unsafe { sys::wrenCall(self.0.as_ptr(), handle.0.as_ptr()) };
 
         InterpretError::from_raw(result)
@@ -120,14 +120,14 @@ impl WrenPtr {
     /// # Safety
     /// Once this function is called, the given handle pointer is invalidated,
     /// and must not be used again.
-    unsafe fn release_handle(&self, handle: HandlePtr) {
+    pub unsafe fn release_handle(&self, handle: HandlePtr) {
         unsafe { sys::wrenReleaseHandle(self.0.as_ptr(), handle.0.as_ptr()) };
     }
 
     /// Gets the number of slots available on the [`WrenVM`].
     ///
     /// [`WrenVM`]: sys::WrenVM
-    fn get_slot_count(&self) -> usize {
+    pub fn get_slot_count(&self) -> usize {
         let slots = unsafe { sys::wrenGetSlotCount(self.0.as_ptr()) };
 
         usize::try_from(slots).expect(SLOT_FROM_USIZE_MSG)
@@ -138,21 +138,28 @@ impl WrenPtr {
     ///
     /// This method will never shrink the slot array.
     ///
+    /// This method also initialises the newly allocated slots to null values.
+    ///
     /// # Safety
     /// This method must not be called from a finalizer method.
-    fn ensure_slots(&self, total: usize) {
+    pub unsafe fn ensure_slots(&self, total: usize) {
         let Ok(slots) = i32::try_from(total) else {
             todo!()
         };
 
+        let old = self.get_slot_count();
         unsafe { sys::wrenEnsureSlots(self.0.as_ptr(), slots) };
+        let new = self.get_slot_count();
+        for i in old..new {
+            unsafe { self.set_slot_null(i) };
+        }
     }
 
     /// Gets the type of the value in `slot`.
     ///
     /// # Safety
     /// The given slot must be both valid and initialised.
-    unsafe fn get_slot_type(&self, slot: usize) -> WrenType {
+    pub unsafe fn get_slot_type(&self, slot: usize) -> WrenType {
         let Ok(slot) = i32::try_from(slot) else {
             todo!()
         };
@@ -163,6 +170,7 @@ impl WrenPtr {
             sys::WrenType::WREN_TYPE_NULL => WrenType::Null,
             sys::WrenType::WREN_TYPE_BOOL => WrenType::Bool,
             sys::WrenType::WREN_TYPE_NUM => WrenType::Num,
+            sys::WrenType::WREN_TYPE_STRING => WrenType::String,
             sys::WrenType::WREN_TYPE_LIST => WrenType::List,
             sys::WrenType::WREN_TYPE_MAP => WrenType::Map,
             sys::WrenType::WREN_TYPE_FOREIGN => WrenType::Foreign,
@@ -175,7 +183,7 @@ impl WrenPtr {
     ///
     /// # Safety
     /// The given slot must be valid and contain a boolean value.
-    unsafe fn get_slot_bool(&self, slot: usize) -> bool {
+    pub unsafe fn get_slot_bool(&self, slot: usize) -> bool {
         debug_assert_eq!(unsafe { self.get_slot_type(slot) }, WrenType::Bool);
 
         let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
@@ -187,7 +195,7 @@ impl WrenPtr {
     ///
     /// # Safety
     /// The given slot must be valid and contain a double value.
-    unsafe fn get_slot_double(&self, slot: usize) -> f64 {
+    pub unsafe fn get_slot_double(&self, slot: usize) -> f64 {
         debug_assert_eq!(unsafe { self.get_slot_type(slot) }, WrenType::Num);
 
         let Ok(slot) = i32::try_from(slot) else {
@@ -202,7 +210,7 @@ impl WrenPtr {
     /// # Safety
     /// The given slot must be valid and contain a string, and the given
     /// pointer must not be dereferenced after the given `slot` is modified.
-    unsafe fn get_slot_string(&self, slot: usize) -> *const [u8] {
+    pub unsafe fn get_slot_string(&self, slot: usize) -> *const [u8] {
         debug_assert_eq!(unsafe { self.get_slot_type(slot) }, WrenType::String);
 
         let Ok(slot) = i32::try_from(slot) else {
@@ -219,7 +227,7 @@ impl WrenPtr {
     ///
     /// # Safety
     /// The given slot must contain a list value.
-    unsafe fn get_list_count(&self, slot: usize) -> usize {
+    pub unsafe fn get_list_count(&self, slot: usize) -> usize {
         let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
 
         let count = unsafe { sys::wrenGetListCount(self.0.as_ptr(), slot) };
@@ -233,7 +241,7 @@ impl WrenPtr {
     /// - The given `slot` must contain a list,
     /// - `index` must be strictly less than the length of that list,
     /// - `into` must be a valid slot.
-    unsafe fn get_list_element(&self, slot: usize, index: usize, into: usize) {
+    pub unsafe fn get_list_element(&self, slot: usize, index: usize, into: usize) {
         todo!()
     }
 
@@ -241,7 +249,7 @@ impl WrenPtr {
     ///
     /// # Safety
     /// The given `slot` must contain a map value.
-    unsafe fn get_map_count(&self, slot: usize) -> usize {
+    pub unsafe fn get_map_count(&self, slot: usize) -> usize {
         todo!()
     }
 
@@ -250,7 +258,7 @@ impl WrenPtr {
     /// # Safety
     /// - The given `slot` must contain a map value,
     /// - `key` must contain an initialised value.
-    unsafe fn map_contains_key(&self, slot: usize, key: usize) -> bool {
+    pub unsafe fn map_contains_key(&self, slot: usize, key: usize) -> bool {
         todo!()
     }
 
@@ -261,7 +269,7 @@ impl WrenPtr {
     /// - The given `slot` must contain a map value,
     /// - `key` must contain an initialised value,
     /// - `value` must be a slot which exists.
-    unsafe fn get_map_value(&self, slot: usize, key: usize, value: usize) {
+    pub unsafe fn get_map_value(&self, slot: usize, key: usize, value: usize) {
         todo!()
     }
 
@@ -270,7 +278,7 @@ impl WrenPtr {
     /// # Safety
     /// The given slot must be valid and contain a foreign value, and the given
     /// pointer must not be dereferenced after the given `slot` is modified.
-    unsafe fn get_slot_foreign<T>(&self, slot: usize) -> *mut T {
+    pub unsafe fn get_slot_foreign<T>(&self, slot: usize) -> *mut T {
         debug_assert_eq!(unsafe { self.get_slot_type(slot) }, WrenType::Foreign);
 
         let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
@@ -282,7 +290,7 @@ impl WrenPtr {
     ///
     /// The returned [`HandlePtr`] should be released with
     /// [`WrenPtr::release_handle`].
-    unsafe fn get_slot_handle(&self, slot: usize) -> HandlePtr {
+    pub unsafe fn get_slot_handle(&self, slot: usize) -> HandlePtr {
         let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
 
         let ptr = unsafe { sys::wrenGetSlotHandle(self.0.as_ptr(), slot) };
@@ -291,19 +299,21 @@ impl WrenPtr {
     }
 
     /// Sets the given `slot` to a null value.
-    unsafe fn set_slot_null(&self, slot: usize) {
-        todo!()
+    pub unsafe fn set_slot_null(&self, slot: usize) {
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenSetSlotNull(self.0.as_ptr(), slot) };
     }
 
     /// Sets the given `slot` to the boolean `value`.
-    unsafe fn set_slot_bool(&self, slot: usize, value: bool) {
+    pub unsafe fn set_slot_bool(&self, slot: usize, value: bool) {
         let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
 
         unsafe { sys::wrenSetSlotBool(self.0.as_ptr(), slot, value) };
     }
 
     /// Sets the given `slot` to the double `value`.
-    unsafe fn set_slot_num(&self, slot: usize, value: f64) {
+    pub unsafe fn set_slot_double(&self, slot: usize, value: f64) {
         let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
 
         unsafe { sys::wrenSetSlotDouble(self.0.as_ptr(), slot, value) };
@@ -318,19 +328,19 @@ impl WrenPtr {
     /// # Safety
     /// - `slot` must be a valid slot,
     /// - `value` must point to initialised bytes.
-    unsafe fn set_slot_bytes(&self, slot: usize, value: *const [u8]) {
+    pub unsafe fn set_slot_bytes(&self, slot: usize, value: *const [u8]) {
         let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
 
         unsafe { sys::wrenSetSlotBytes(self.0.as_ptr(), slot, value.cast::<i8>(), value.len()) };
     }
 
     /// Stores a new empty list in `slot`.
-    unsafe fn set_slot_new_list(&self, slot: usize) {
+    pub unsafe fn set_slot_new_list(&self, slot: usize) {
         todo!()
     }
 
     /// Stores a new empty map in `slot`.
-    unsafe fn set_slot_new_map(&self, slot: usize) {
+    pub unsafe fn set_slot_new_map(&self, slot: usize) {
         todo!()
     }
 
@@ -342,7 +352,7 @@ impl WrenPtr {
     /// which will then call the allocator foreign method. In there, call
     /// this to create the object and then the constructor will be invoked when
     /// the allocator returns.
-    unsafe fn set_slot_new_foreign<T>(
+    pub unsafe fn set_slot_new_foreign<T>(
         &self,
         slot: usize,
         class_slot: usize,
@@ -354,24 +364,24 @@ impl WrenPtr {
     /// Stores the value captured in `handle` in the given slot.
     ///
     /// This does not release the given handle.
-    unsafe fn set_slot_handle(&self, slot: usize, handle: HandlePtr) {
+    pub unsafe fn set_slot_handle(&self, slot: usize, handle: HandlePtr) {
         todo!()
     }
 
-    unsafe fn insert_in_list(&self, slot: usize, index: isize, value_slot: usize) {
+    pub unsafe fn insert_in_list(&self, slot: usize, index: isize, value_slot: usize) {
         todo!()
     }
 
-    unsafe fn set_map_value(&self, slot: usize, key_slot: usize, value_slot: usize) {
+    pub unsafe fn set_map_value(&self, slot: usize, key_slot: usize, value_slot: usize) {
         todo!()
     }
 
-    unsafe fn remove_map_value(&self, slot: usize, key_slot: usize, into_slot: usize) {
+    pub unsafe fn remove_map_value(&self, slot: usize, key_slot: usize, into_slot: usize) {
         todo!()
     }
 
     /// Checks if the given `module` is loaded.
-    fn has_module(&self, module: &CStr) -> bool {
+    pub fn has_module(&self, module: &CStr) -> bool {
         unsafe { sys::wrenHasModule(self.0.as_ptr(), module.as_ptr()) }
     }
 
@@ -379,7 +389,7 @@ impl WrenPtr {
     ///
     /// # Safety
     /// The given `module` must be already be imported.
-    unsafe fn has_variable(&self, module: &CStr, name: &CStr) -> bool {
+    pub unsafe fn has_variable(&self, module: &CStr, name: &CStr) -> bool {
         debug_assert!(self.has_module(module));
 
         unsafe { sys::wrenHasVariable(self.0.as_ptr(), module.as_ptr(), name.as_ptr()) }
@@ -390,7 +400,7 @@ impl WrenPtr {
     /// # Safety
     /// - The given module and variable must both exist,
     /// - The given `slot` must be a valid slot.
-    unsafe fn get_variable(&self, module: &CStr, name: &CStr, slot: usize) {
+    pub unsafe fn get_variable(&self, module: &CStr, name: &CStr, slot: usize) {
         debug_assert!(self.has_module(module));
         debug_assert!(unsafe { self.has_variable(module, name) });
 
@@ -401,17 +411,17 @@ impl WrenPtr {
 
     /// Sets the current fiber to be aborted, using the value stored in `slot`
     /// as the runtime error object.
-    unsafe fn abort_fiber(&self, slot: usize) {
+    pub unsafe fn abort_fiber(&self, slot: usize) {
         todo!()
     }
 
     /// Sets the user data pointer of the underlying [`WrenVM`].
-    unsafe fn set_user_data(&self, ptr: *mut impl Sized) {
+    pub unsafe fn set_user_data(&self, ptr: *mut impl Sized) {
         unsafe { sys::wrenSetUserData(self.0.as_ptr(), ptr.cast()) };
     }
 
     /// Gets the user data pointer of the underlying [`WrenVM`].
-    fn get_user_data<T>(&self) -> *mut T {
+    pub fn get_user_data<T>(&self) -> *mut T {
         unsafe { sys::wrenGetUserData(self.0.as_ptr()) }.cast()
     }
 }

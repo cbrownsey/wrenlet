@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+sealed = "0.6.0"
 sys = { git = "https://github.com/cbrownsey/wren-sys.git", package = "wren-sys" }
