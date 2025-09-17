@@ -1,8 +1,14 @@
 [package]
 name = "wrenlet"
+authors = ["Cameron Brownsey <root@cbrownsey.dev>"]
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Safe bindings to the `Wren` scripting language."
+repository = "https://github.com/cbrownsey/wrenlet"
 
 [dependencies]
 sealed = "0.6.0"
-sys = { git = "https://github.com/cbrownsey/wren-sys.git", package = "wren-sys" }
+sys = { package = "wrenlet-sys", version = "0.1.0" }
+
+[features]

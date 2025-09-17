@@ -1,3 +1,6 @@
+//! Values which can be passed to or from [`Wren`].
+//!
+//! [`Wren`]: crate::Wren
 #![allow(private_interfaces)]
 
 use std::{

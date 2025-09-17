@@ -50,10 +50,15 @@ impl Default for Wren<()> {
 }
 
 impl Wren<()> {
+    /// Creates a new Wren virtual machine.
+    ///
+    /// This machine has no associated data, it can access no modules, and it
+    /// prints its output to the standard output.
     pub fn new() -> Wren<()> {
         Builder::new().build()
     }
 
+    /// Creates a new builder for constructing a [`Wren`].
     pub fn builder() -> Builder<(), Empty, Stdout> {
         Builder::new()
     }
@@ -89,6 +94,9 @@ impl<U, M, W> Wren<U, M, W> {
         CallHandle(self.0, call_handle)
     }
 
+    /// Calls a method on `reciever` with the given arguments.
+    ///
+    /// A [`CallHandle`] can be created with [`Wren::make_call_handle`].
     pub fn call<'a, T>(
         &'a mut self,
         handle: CallHandle,
@@ -111,6 +119,7 @@ impl<U, M, W> Wren<U, M, W> {
         }
     }
 
+    /// Looks up the top level variable in `module` called `name`.
     pub fn get_variable<'s, T>(&'s self, module: &str, name: &str) -> Result<T, Error>
     where
         T: FromWren<'s>,
@@ -196,9 +205,6 @@ impl<U, M, W> Drop for Wren<U, M, W> {
 }
 
 /// A compiled identifier for a Wren method signature.
-///
-/// This object holds a reference to the Wren virtual machine, and so should be
-/// dropped.
 pub struct CallHandle(WrenPtr, HandlePtr);
 
 impl Drop for CallHandle {

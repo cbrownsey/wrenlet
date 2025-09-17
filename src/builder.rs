@@ -9,6 +9,7 @@ use crate::{
     wren::{Wren, WrenData, WrenHeader},
 };
 
+/// A builder for an instance of a Wren virtual machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Builder<U, M, W> {
     user_data: U,

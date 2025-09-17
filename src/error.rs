@@ -1,3 +1,5 @@
+//! Error values which may be returned by this library.
+
 #[derive(Debug, Clone)]
 pub enum Error {
     Runtime,
