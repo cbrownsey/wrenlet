@@ -1,304 +1,189 @@
 use std::{
     alloc::{Layout, handle_alloc_error},
-    cell::{Cell, RefCell, UnsafeCell},
+    io::Stdout,
     mem::MaybeUninit,
-    ptr::NonNull,
 };
 
 use crate::{
-    Wren,
-    wren::{WrenHeader, WrenInner},
+    module::{Empty, ModuleLoader},
+    wren::{Wren, WrenData, WrenHeader},
 };
 
-/// A Wren virtual machine builder. Providing fine control of how the Wren virtual machine should be instantiated.
-pub struct WrenBuilder<T = ()> {
-    user_data: T,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Builder<U, M, W> {
+    user_data: U,
+    loader: M,
+    writer: W,
 }
 
-impl Default for WrenBuilder {
-    fn default() -> Self {
-        WrenBuilder::new()
+impl Builder<(), Empty, Stdout> {
+    pub fn new() -> Self {
+        Builder {
+            user_data: (),
+            loader: Empty,
+            writer: std::io::stdout(),
+        }
     }
 }
 
-impl WrenBuilder {
-    /// Creates a new, empty builder.
-    pub fn new() -> WrenBuilder {
-        WrenBuilder { user_data: () }
-    }
-}
+impl<U, M, W> Builder<U, M, W> {
+    pub fn with_data<T>(self, user_data: T) -> Builder<T, M, W> {
+        let Builder { loader, writer, .. } = self;
 
-impl<T> WrenBuilder<T> {
-    pub fn user_data<U>(self, user_data: U) -> WrenBuilder<U> {
-        let Self { .. } = self;
-
-        WrenBuilder { user_data }
+        Builder {
+            user_data,
+            loader,
+            writer,
+        }
     }
 
-    pub fn build(self) -> Wren<T> {
-        let Self { user_data } = self;
+    pub fn with_loader<T>(self, loader: T) -> Builder<U, T, W>
+    where
+        T: ModuleLoader,
+    {
+        let Builder {
+            user_data, writer, ..
+        } = self;
 
+        Builder {
+            user_data,
+            loader,
+            writer,
+        }
+    }
+
+    pub fn with_output<T>(self, writer: T) -> Builder<U, M, T>
+    where
+        T: std::io::Write,
+    {
+        let Builder {
+            user_data, loader, ..
+        } = self;
+
+        Builder {
+            user_data,
+            loader,
+            writer,
+        }
+    }
+
+    pub fn build(self) -> Wren<U, M, W>
+    where
+        M: ModuleLoader,
+        W: std::io::Write,
+    {
         let mut conf = MaybeUninit::uninit();
 
         unsafe { sys::wrenInitConfiguration(conf.as_mut_ptr()) };
 
         let mut conf = unsafe { conf.assume_init() };
 
-        conf.writeFn = Some(c_functions::write_fn);
-        conf.errorFn = Some(c_functions::error_fn::<T>);
-        conf.reallocateFn = Some(c_functions::reallocate_fn::<T>);
-        conf.bindForeignMethodFn = Some(c_functions::bind_foreign_method_fn);
+        let user_data = WrenData::allocate(self.user_data, self.loader, self.writer);
+
+        conf.userData = user_data.cast::<core::ffi::c_void>();
+
+        conf.writeFn = Some(c_functions::write_fn::<U, M, W>);
+        conf.errorFn = Some(c_functions::error_fn::<U, M, W>);
         conf.bindForeignClassFn = Some(c_functions::bind_foreign_class_fn);
+        conf.bindForeignMethodFn = Some(c_functions::bind_foreign_method_fn);
 
-        conf.userData = Box::into_raw(Box::new(WrenInner {
-            header: WrenHeader {
-                foreign_layout: Cell::new(None),
-                ref_count: Cell::new(1),
-                slots_allocated: Cell::new(0),
-                error: RefCell::new(None),
-            },
-            user_data,
-        }))
-        .cast();
-
-        let vm = unsafe { sys::wrenNewVM(&mut conf) };
-
-        debug_assert!(!vm.is_null());
-
-        unsafe { Wren::from_ptr(vm) }
+        let ptr = unsafe { sys::wrenNewVM(&mut conf) };
+        unsafe { Wren::from_ptr(ptr) }
     }
 }
 
 mod c_functions {
-    use std::{
-        alloc::Layout,
-        ffi::{CStr, c_void},
-        io::Write,
-        marker::PhantomData,
-    };
+    use std::{ffi::CStr, mem::ManuallyDrop};
 
-    use crate::{builder::WrenAllocation, wren::Error, wren::RawWren};
+    use crate::{raw::WrenPtr, wren::Wren};
 
-    pub extern "C" fn reallocate_fn<T>(
-        ptr: *mut c_void,
-        new_size: usize,
-        _user_data: *mut c_void,
-    ) -> *mut c_void {
-        let _ = PhantomData::<T>;
+    pub unsafe extern "C" fn write_fn<U, M, W>(vm: *mut sys::WrenVM, text: *const i8) {
+        let _wren = ManuallyDrop::new(unsafe { Wren::<U, M, W>::from_ptr(vm) });
 
-        match (ptr.is_null(), new_size != 0) {
-            // Deallocate existing allocation.
-            (false, false) => {
-                unsafe {
-                    WrenAllocation::from_ptr(ptr).deallocate();
-                };
-
-                std::ptr::null_mut()
-            }
-            // Resize existing allocation.
-            (false, true) => {
-                let mut alloc = unsafe { WrenAllocation::from_ptr(ptr) };
-
-                unsafe { alloc.reallocate(Layout::from_size_align_unchecked(new_size, 8)) };
-
-                alloc.into_raw()
-            }
-            // Impossible combination.
-            (true, false) => std::ptr::null_mut(),
-            // Allocate new chunk.
-            (true, true) => {
-                let data_layout = Layout::from_size_align(new_size, 8).unwrap();
-
-                let alloc = WrenAllocation::new(data_layout);
-
-                alloc.into_raw()
-            }
-        }
-    }
-
-    pub extern "C" fn write_fn(_vm: *mut sys::WrenVM, text: *const i8) {
         let text = unsafe { CStr::from_ptr(text) };
 
-        let text = text.to_bytes();
-
-        let _ = std::io::stdout().write_all(text);
+        print!("{}", text.to_string_lossy());
     }
 
-    pub extern "C" fn error_fn<T>(
+    pub unsafe extern "C" fn error_fn<U, M, W>(
         vm: *mut sys::WrenVM,
-        ty: sys::WrenErrorType,
+        error_type: sys::WrenErrorType,
         module: *const i8,
         line: i32,
         message: *const i8,
     ) {
-        let mut vm = unsafe { RawWren::from_ptr(vm) };
+        let _wren = ManuallyDrop::new(unsafe { Wren::<U, M, W>::from_ptr(vm) });
 
-        match ty {
+        match error_type {
             sys::WrenErrorType::WREN_ERROR_COMPILE => {
-                assert!(!module.is_null());
-                assert!(!message.is_null());
+                let module = unsafe { CStr::from_ptr(module) };
+                let message = unsafe { CStr::from_ptr(message) };
 
-                let module = unsafe { CStr::from_ptr(module) }
-                    .to_string_lossy()
-                    .to_string();
-                let message = unsafe { CStr::from_ptr(message) }
-                    .to_string_lossy()
-                    .to_string();
-
-                unsafe { vm.set_compile_error(module, line, message) };
+                println!(
+                    "[{} line {line}] [Error] {}",
+                    module.to_string_lossy(),
+                    message.to_string_lossy()
+                );
             }
             sys::WrenErrorType::WREN_ERROR_RUNTIME => {
-                assert!(!message.is_null());
+                let message = unsafe { CStr::from_ptr(message) };
 
-                let message = unsafe { CStr::from_ptr(message) }
-                    .to_string_lossy()
-                    .to_string();
-
-                unsafe { vm.set_runtime_error(message) };
+                println!("[Runtime Error] {}", message.to_string_lossy());
             }
             sys::WrenErrorType::WREN_ERROR_STACK_TRACE => {
-                assert!(!module.is_null());
-                assert!(!message.is_null());
+                let module = unsafe { CStr::from_ptr(module) };
+                let method = unsafe { CStr::from_ptr(message) };
 
-                let module = unsafe { CStr::from_ptr(module) }
-                    .to_string_lossy()
-                    .to_string();
-                let method = unsafe { CStr::from_ptr(message) }
-                    .to_string_lossy()
-                    .to_string();
-
-                unsafe { vm.add_stacktrace(module, line, method) };
+                println!(
+                    "[{} line {line}] in {}",
+                    module.to_string_lossy(),
+                    method.to_string_lossy()
+                );
             }
             _ => unreachable!(),
         }
     }
 
-    pub extern "C" fn bind_foreign_method_fn(
-        _vm: *mut sys::WrenVM,
-        _module: *const i8,
-        _class: *const i8,
-        _is_static: bool,
-        _signature: *const i8,
-    ) -> sys::WrenForeignMethodFn {
-        None
-    }
-
-    pub extern "C" fn bind_foreign_class_fn(
-        _vm: *mut sys::WrenVM,
+    pub unsafe extern "C" fn bind_foreign_class_fn(
+        vm: *mut sys::WrenVM,
         module: *const i8,
-        class: *const i8,
+        class_name: *const i8,
     ) -> sys::WrenForeignClassMethods {
-        let module = if !module.is_null() {
-            Some(unsafe { CStr::from_ptr(module) })
-        } else {
-            None
-        };
+        let _wren = unsafe { WrenPtr::from_raw(vm) };
 
-        let class = if !class.is_null() {
-            Some(unsafe { CStr::from_ptr(class) })
-        } else {
-            None
-        };
+        assert!(!module.is_null());
+        assert!(!class_name.is_null());
 
-        dbg!(module, class);
+        let module = unsafe { CStr::from_ptr(module) };
+        let class_name = unsafe { CStr::from_ptr(class_name) };
+
+        dbg!(module, class_name);
 
         sys::WrenForeignClassMethods {
             allocate: None,
             finalize: None,
         }
     }
-}
 
-struct WrenAllocation(std::ptr::NonNull<u8>);
+    pub unsafe extern "C" fn bind_foreign_method_fn(
+        vm: *mut sys::WrenVM,
+        module: *const i8,
+        class_name: *const i8,
+        is_static: bool,
+        signature: *const i8,
+    ) -> Option<unsafe extern "C" fn(*mut sys::WrenVM)> {
+        let _wren = unsafe { WrenPtr::from_raw(vm) };
 
-impl WrenAllocation {
-    fn new(layout: Layout) -> WrenAllocation {
-        let (full_layout, offset) = Layout::new::<Layout>().extend(layout).unwrap();
+        assert!(!module.is_null());
+        assert!(!class_name.is_null());
+        assert!(!signature.is_null());
 
-        let ptr = unsafe { std::alloc::alloc(full_layout) };
+        let module = unsafe { CStr::from_ptr(module) };
+        let class_name = unsafe { CStr::from_ptr(class_name) };
+        let signature = unsafe { CStr::from_ptr(signature) };
 
-        if ptr.is_null() {
-            handle_alloc_error(full_layout);
-        }
+        dbg!(module, class_name, is_static, signature);
 
-        let ptr = unsafe { ptr.byte_add(offset) };
-
-        let alloc = unsafe { WrenAllocation::from_ptr(ptr) };
-
-        unsafe { alloc.layout_ptr().write(layout) };
-
-        alloc
-    }
-
-    unsafe fn reallocate(&mut self, layout: Layout) {
-        // An annoying one two is used to avoid having to think too hard about layouts.
-
-        let mut new = WrenAllocation::new(layout);
-
-        let to_copy = std::cmp::min(layout.size(), self.layout().size());
-
-        unsafe {
-            new.data_ptr()
-                .copy_from_nonoverlapping(self.data_ptr(), to_copy)
-        };
-
-        std::mem::swap(self, &mut new);
-
-        unsafe { new.deallocate() };
-    }
-
-    unsafe fn deallocate(self) {
-        let layout = self.layout();
-
-        let (layout, offset) = Layout::new::<Layout>().extend(layout).unwrap();
-
-        let ptr = unsafe { self.data_ptr().byte_sub(offset) };
-
-        unsafe { std::alloc::dealloc(ptr, layout) };
-    }
-
-    unsafe fn from_ptr(ptr: *mut impl Sized) -> WrenAllocation {
-        unsafe { WrenAllocation(NonNull::new_unchecked(ptr.cast())) }
-    }
-
-    fn layout_ptr(&self) -> *mut Layout {
-        unsafe {
-            self.0
-                .as_ptr()
-                .cast::<Layout>()
-                .byte_sub(std::mem::size_of::<Layout>())
-        }
-    }
-
-    fn layout(&self) -> Layout {
-        unsafe { self.layout_ptr().read() }
-    }
-
-    fn data_ptr(&self) -> *mut u8 {
-        self.0.as_ptr()
-    }
-
-    fn into_raw(self) -> *mut std::ffi::c_void {
-        self.0.as_ptr().cast()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wren_allocation_basics() {
-        let alloc = WrenAllocation::new(Layout::new::<u128>());
-
-        assert_eq!(alloc.layout(), Layout::new::<u128>());
-
-        let alloc = WrenAllocation::new(Layout::new::<u8>());
-
-        assert_eq!(alloc.layout(), Layout::new::<u8>());
-
-        let alloc = WrenAllocation::new(Layout::new::<u64>());
-
-        assert_eq!(alloc.layout(), Layout::new::<u64>());
+        None
     }
 }

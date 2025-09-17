@@ -1,6 +1,7 @@
 #![allow(private_interfaces)]
 
 use std::{
+    any::TypeId,
     marker::PhantomData,
     ops::{Deref, DerefMut},
 };
@@ -9,11 +10,13 @@ use ::sealed::sealed;
 
 use crate::{
     error::Error,
-    raw::{HandlePtr, WrenPtr},
+    raw::{HandlePtr, WrenPtr, WrenType},
+    wren::WrenHeader,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-enum Value<'s> {
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub enum Value<'s> {
     #[default]
     Null,
     Bool(bool),
@@ -25,7 +28,7 @@ pub struct Handle(WrenPtr, HandlePtr);
 
 #[sealed]
 impl IntoWren for Handle {
-    fn into_wren(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
+    fn put_value(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
         assert_eq!(self.0, *wren);
 
         unsafe { wren.set_slot_handle(slot, self.1) };
@@ -36,60 +39,66 @@ impl IntoWren for Handle {
 
 #[sealed]
 impl FromWren<'_> for Handle {
-    fn from_wren(wren: &WrenPtr, slot: usize) -> Result<Self, Error> {
-        match unsafe { wren.get_slot_type(slot)}
+    fn get_value(wren: &WrenPtr, slot: usize) -> Result<Self, Error> {
+        unsafe { wren.ensure_slots(slot + 1) };
 
-        let ptr = unsafe { wren.get_slot_handle(slot) };
+        let handle = unsafe { wren.get_slot_handle(slot) };
 
+        unsafe { WrenHeader::claim(wren.get_user_data()) };
 
+        Ok(Handle(*wren, handle))
     }
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        todo!()
+        unsafe { self.0.release_handle(self.1) };
+
+        unsafe { WrenHeader::release(self.0.get_user_data()) };
     }
 }
 
 #[sealed]
 pub trait FromWren<'s>: Sized {
-    fn from_wren(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error>;
+    fn get_value(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error>;
 }
 
 #[sealed]
 impl<'s> FromWren<'s> for Value<'s> {
-    fn from_wren(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
-        assert!(wren.get_slot_count() > slot);
+    fn get_value(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
+        if slot >= wren.get_slot_count() {
+            return Ok(Self::Null);
+        }
 
         match unsafe { wren.get_slot_type(slot) } {
-            crate::raw::WrenType::Null => Ok(Value::Null),
-            crate::raw::WrenType::Bool => {
+            WrenType::Null => Ok(Value::Null),
+            WrenType::Bool => {
                 let value = unsafe { wren.get_slot_bool(slot) };
 
                 Ok(Value::Bool(value))
             }
-            crate::raw::WrenType::Num => {
+            WrenType::Num => {
                 let value = unsafe { wren.get_slot_double(slot) };
 
                 Ok(Value::Num(value))
             }
-            crate::raw::WrenType::String => {
+            WrenType::String => {
                 let value = unsafe { wren.get_slot_string(slot) };
 
                 Ok(Value::String(unsafe { &*value }))
             }
-            crate::raw::WrenType::List => todo!(),
-            crate::raw::WrenType::Map => todo!(),
-            crate::raw::WrenType::Unknown => todo!(),
-            crate::raw::WrenType::Foreign => todo!(),
+            WrenType::List => todo!(),
+            WrenType::Map => todo!(),
+            WrenType::Unknown => todo!(),
+            WrenType::Foreign => todo!(),
         }
     }
 }
 
 #[sealed]
 impl FromWren<'_> for () {
-    fn from_wren(wren: &WrenPtr, slot: usize) -> Result<Self, Error> {
-        let Value::Null = Value::from_wren(wren, slot)? else {
+    fn get_value(wren: &WrenPtr, slot: usize) -> Result<Self, Error> {
+        let Value::Null = Value::get_value(wren, slot)? else {
             todo!()
         };
 
@@ -99,8 +108,8 @@ impl FromWren<'_> for () {
 
 #[sealed]
 impl FromWren<'_> for bool {
-    fn from_wren(wren: &WrenPtr, slot: usize) -> Result<Self, Error> {
-        let Value::Bool(value) = Value::from_wren(wren, slot)? else {
+    fn get_value(wren: &WrenPtr, slot: usize) -> Result<Self, Error> {
+        let Value::Bool(value) = Value::get_value(wren, slot)? else {
             todo!()
         };
 
@@ -110,8 +119,8 @@ impl FromWren<'_> for bool {
 
 #[sealed]
 impl FromWren<'_> for f64 {
-    fn from_wren(wren: &'_ WrenPtr, slot: usize) -> Result<Self, Error> {
-        let Value::Num(value) = Value::from_wren(wren, slot)? else {
+    fn get_value(wren: &'_ WrenPtr, slot: usize) -> Result<Self, Error> {
+        let Value::Num(value) = Value::get_value(wren, slot)? else {
             todo!();
         };
 
@@ -121,8 +130,8 @@ impl FromWren<'_> for f64 {
 
 #[sealed]
 impl<'s> FromWren<'s> for &'s [u8] {
-    fn from_wren(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
-        let Value::String(value) = Value::from_wren(wren, slot)? else {
+    fn get_value(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
+        let Value::String(value) = Value::get_value(wren, slot)? else {
             todo!();
         };
 
@@ -132,8 +141,8 @@ impl<'s> FromWren<'s> for &'s [u8] {
 
 #[sealed]
 impl<'s> FromWren<'s> for &'s str {
-    fn from_wren(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
-        let bytes = <&[u8]>::from_wren(wren, slot)?;
+    fn get_value(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
+        let bytes = <&[u8]>::get_value(wren, slot)?;
 
         Ok(std::str::from_utf8(bytes).unwrap())
     }
@@ -141,8 +150,8 @@ impl<'s> FromWren<'s> for &'s str {
 
 #[sealed]
 impl<'s> FromWren<'s> for std::borrow::Cow<'s, str> {
-    fn from_wren(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
-        let bytes = <&[u8]>::from_wren(wren, slot)?;
+    fn get_value(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
+        let bytes = <&[u8]>::get_value(wren, slot)?;
 
         Ok(String::from_utf8_lossy(bytes))
     }
@@ -150,8 +159,8 @@ impl<'s> FromWren<'s> for std::borrow::Cow<'s, str> {
 
 #[sealed]
 impl<'s> FromWren<'s> for String {
-    fn from_wren(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
-        let text = std::borrow::Cow::from_wren(wren, slot)?;
+    fn get_value(wren: &'s WrenPtr, slot: usize) -> Result<Self, Error> {
+        let text = std::borrow::Cow::get_value(wren, slot)?;
 
         Ok(text.to_string())
     }
@@ -159,12 +168,12 @@ impl<'s> FromWren<'s> for String {
 
 #[sealed]
 pub trait IntoWren {
-    fn into_wren(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error>;
+    fn put_value(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error>;
 }
 
 #[sealed]
 impl IntoWren for () {
-    fn into_wren(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
+    fn put_value(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
         unsafe { wren.ensure_slots(slot + 1) };
 
         unsafe { wren.set_slot_null(slot) };
@@ -175,7 +184,7 @@ impl IntoWren for () {
 
 #[sealed]
 impl IntoWren for bool {
-    fn into_wren(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
+    fn put_value(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
         unsafe { wren.ensure_slots(slot + 1) };
 
         unsafe { wren.set_slot_bool(slot, *self) };
@@ -186,7 +195,7 @@ impl IntoWren for bool {
 
 #[sealed]
 impl IntoWren for f64 {
-    fn into_wren(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
+    fn put_value(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
         unsafe { wren.ensure_slots(slot + 1) };
 
         unsafe { wren.set_slot_double(slot, *self) };
@@ -197,7 +206,7 @@ impl IntoWren for f64 {
 
 #[sealed]
 impl IntoWren for [u8] {
-    fn into_wren(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
+    fn put_value(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
         unsafe { wren.ensure_slots(slot + 1) };
 
         unsafe { wren.set_slot_bytes(slot, self) };
@@ -208,8 +217,15 @@ impl IntoWren for [u8] {
 
 #[sealed]
 impl IntoWren for str {
-    fn into_wren(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
-        self.as_bytes().into_wren(wren, slot)
+    fn put_value(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
+        self.as_bytes().put_value(wren, slot)
+    }
+}
+
+#[sealed]
+impl<T: IntoWren + ?Sized> IntoWren for &T {
+    fn put_value(&self, wren: &WrenPtr, slot: usize) -> Result<(), Error> {
+        (*self).put_value(wren, slot)
     }
 }
 
@@ -219,36 +235,105 @@ impl IntoWren for str {
 /// Passing no arguments is not supported, as all Wren methods require a
 /// reciever class.
 #[sealed]
-pub trait WrenArguments {}
+pub trait WrenArguments {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error>;
+}
 
 #[sealed]
-impl<A: IntoWren> WrenArguments for (A,) {}
+impl WrenArguments for () {
+    fn prepare(&self, _wren: &WrenPtr) -> Result<(), Error> {
+        Ok(())
+    }
+}
 
 #[sealed]
-impl<A: IntoWren, B: IntoWren> WrenArguments for (A, B) {}
+impl<A: IntoWren> WrenArguments for (A,) {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error> {
+        self.0.put_value(wren, 1)?;
+
+        Ok(())
+    }
+}
 
 #[sealed]
-impl<A: IntoWren, B: IntoWren, C: IntoWren> WrenArguments for (A, B, C) {}
+impl<A: IntoWren, B: IntoWren> WrenArguments for (A, B) {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error> {
+        self.0.put_value(wren, 1)?;
+        self.1.put_value(wren, 2)?;
+
+        Ok(())
+    }
+}
 
 #[sealed]
-impl<A: IntoWren, B: IntoWren, C: IntoWren, D: IntoWren> WrenArguments for (A, B, C, D) {}
+impl<A: IntoWren, B: IntoWren, C: IntoWren> WrenArguments for (A, B, C) {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error> {
+        self.0.put_value(wren, 1)?;
+        self.1.put_value(wren, 2)?;
+        self.2.put_value(wren, 3)?;
+
+        Ok(())
+    }
+}
+
+#[sealed]
+impl<A: IntoWren, B: IntoWren, C: IntoWren, D: IntoWren> WrenArguments for (A, B, C, D) {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error> {
+        self.0.put_value(wren, 1)?;
+        self.1.put_value(wren, 2)?;
+        self.2.put_value(wren, 3)?;
+        self.3.put_value(wren, 4)?;
+
+        Ok(())
+    }
+}
 
 #[sealed]
 impl<A: IntoWren, B: IntoWren, C: IntoWren, D: IntoWren, E: IntoWren> WrenArguments
     for (A, B, C, D, E)
 {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error> {
+        self.0.put_value(wren, 1)?;
+        self.1.put_value(wren, 2)?;
+        self.2.put_value(wren, 3)?;
+        self.3.put_value(wren, 4)?;
+        self.4.put_value(wren, 5)?;
+
+        Ok(())
+    }
 }
 
 #[sealed]
 impl<A: IntoWren, B: IntoWren, C: IntoWren, D: IntoWren, E: IntoWren, F: IntoWren> WrenArguments
     for (A, B, C, D, E, F)
 {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error> {
+        self.0.put_value(wren, 1)?;
+        self.1.put_value(wren, 2)?;
+        self.2.put_value(wren, 3)?;
+        self.3.put_value(wren, 4)?;
+        self.4.put_value(wren, 5)?;
+        self.5.put_value(wren, 6)?;
+
+        Ok(())
+    }
 }
 
 #[sealed]
 impl<A: IntoWren, B: IntoWren, C: IntoWren, D: IntoWren, E: IntoWren, F: IntoWren, G: IntoWren>
     WrenArguments for (A, B, C, D, E, F, G)
 {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error> {
+        self.0.put_value(wren, 1)?;
+        self.1.put_value(wren, 2)?;
+        self.2.put_value(wren, 3)?;
+        self.3.put_value(wren, 4)?;
+        self.4.put_value(wren, 5)?;
+        self.5.put_value(wren, 6)?;
+        self.6.put_value(wren, 7)?;
+
+        Ok(())
+    }
 }
 
 #[sealed]
@@ -263,4 +348,16 @@ impl<
     H: IntoWren,
 > WrenArguments for (A, B, C, D, E, F, G, H)
 {
+    fn prepare(&self, wren: &WrenPtr) -> Result<(), Error> {
+        self.0.put_value(wren, 1)?;
+        self.1.put_value(wren, 2)?;
+        self.2.put_value(wren, 3)?;
+        self.3.put_value(wren, 4)?;
+        self.4.put_value(wren, 5)?;
+        self.5.put_value(wren, 6)?;
+        self.6.put_value(wren, 7)?;
+        self.7.put_value(wren, 8)?;
+
+        Ok(())
+    }
 }

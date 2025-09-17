@@ -242,7 +242,12 @@ impl WrenPtr {
     /// - `index` must be strictly less than the length of that list,
     /// - `into` must be a valid slot.
     pub unsafe fn get_list_element(&self, slot: usize, index: usize, into: usize) {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+        let index =
+            i32::try_from(index).expect("Attempted to get an array index from a usize index.");
+        let into = i32::try_from(into).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenGetListElement(self.0.as_ptr(), slot, index, into) };
     }
 
     /// Gets the number of entries in the map stored in `slot`.
@@ -250,7 +255,11 @@ impl WrenPtr {
     /// # Safety
     /// The given `slot` must contain a map value.
     pub unsafe fn get_map_count(&self, slot: usize) -> usize {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+
+        let count = unsafe { sys::wrenGetMapCount(self.0.as_ptr(), slot) };
+
+        usize::try_from(count).unwrap()
     }
 
     /// Returns `true` if the map stored in `slot` contains the key stored in `key`.
@@ -259,7 +268,10 @@ impl WrenPtr {
     /// - The given `slot` must contain a map value,
     /// - `key` must contain an initialised value.
     pub unsafe fn map_contains_key(&self, slot: usize, key: usize) -> bool {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+        let key = i32::try_from(key).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenGetMapContainsKey(self.0.as_ptr(), slot, key) }
     }
 
     /// Retrieves a value from the map in `slot` with the key in `key`.
@@ -270,7 +282,11 @@ impl WrenPtr {
     /// - `key` must contain an initialised value,
     /// - `value` must be a slot which exists.
     pub unsafe fn get_map_value(&self, slot: usize, key: usize, value: usize) {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+        let key = i32::try_from(key).expect(SLOT_FROM_USIZE_MSG);
+        let value = i32::try_from(value).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenGetMapValue(self.0.as_ptr(), slot, key, value) };
     }
 
     /// Reads a pointer to the foreign value stored in the given `slot`.
@@ -365,7 +381,9 @@ impl WrenPtr {
     ///
     /// This does not release the given handle.
     pub unsafe fn set_slot_handle(&self, slot: usize, handle: HandlePtr) {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenSetSlotHandle(self.0.as_ptr(), slot, handle.0.as_ptr()) };
     }
 
     pub unsafe fn insert_in_list(&self, slot: usize, index: isize, value_slot: usize) {
@@ -412,7 +430,9 @@ impl WrenPtr {
     /// Sets the current fiber to be aborted, using the value stored in `slot`
     /// as the runtime error object.
     pub unsafe fn abort_fiber(&self, slot: usize) {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenAbortFiber(self.0.as_ptr(), slot) };
     }
 
     /// Sets the user data pointer of the underlying [`WrenVM`].
