@@ -1,12 +1,8 @@
-use std::{
-    alloc::{Layout, handle_alloc_error},
-    io::Stdout,
-    mem::MaybeUninit,
-};
+use std::{io::Stdout, mem::MaybeUninit};
 
 use crate::{
     module::{Empty, ModuleLoader},
-    wren::{Wren, WrenData, WrenHeader},
+    wren::{Wren, WrenData},
 };
 
 /// A builder for an instance of a Wren virtual machine.

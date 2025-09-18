@@ -1,4 +1,4 @@
-use std::{alloc::Layout, ffi::CStr, ptr::NonNull};
+use std::{ffi::CStr, ptr::NonNull};
 
 const SLOT_FROM_USIZE_MSG: &str = "Attempted to get a slot index from an invalid usize.";
 
@@ -241,7 +241,7 @@ impl WrenPtr {
     /// - The given `slot` must contain a list,
     /// - `index` must be strictly less than the length of that list,
     /// - `into` must be a valid slot.
-    pub unsafe fn get_list_element(&self, slot: usize, index: usize, into: usize) {
+    pub unsafe fn get_list_element(&self, slot: usize, index: isize, into: usize) {
         let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
         let index =
             i32::try_from(index).expect("Attempted to get an array index from a usize index.");
@@ -352,7 +352,9 @@ impl WrenPtr {
 
     /// Stores a new empty list in `slot`.
     pub unsafe fn set_slot_new_list(&self, slot: usize) {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenSetSlotNewList(self.0.as_ptr(), slot) };
     }
 
     /// Stores a new empty map in `slot`.
@@ -374,7 +376,10 @@ impl WrenPtr {
         class_slot: usize,
         size: usize,
     ) -> *mut T {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+        let class_slot = i32::try_from(class_slot).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenSetSlotNewForeign(self.0.as_ptr(), slot, class_slot, size) }.cast()
     }
 
     /// Stores the value captured in `handle` in the given slot.
@@ -387,15 +392,27 @@ impl WrenPtr {
     }
 
     pub unsafe fn insert_in_list(&self, slot: usize, index: isize, value_slot: usize) {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+        let index = i32::try_from(index).expect("Index out of range for i32.");
+        let value_slot = i32::try_from(value_slot).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenInsertInList(self.0.as_ptr(), slot, index, value_slot) };
     }
 
     pub unsafe fn set_map_value(&self, slot: usize, key_slot: usize, value_slot: usize) {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+        let key_slot = i32::try_from(key_slot).expect(SLOT_FROM_USIZE_MSG);
+        let value_slot = i32::try_from(value_slot).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenSetMapValue(self.0.as_ptr(), slot, key_slot, value_slot) };
     }
 
     pub unsafe fn remove_map_value(&self, slot: usize, key_slot: usize, into_slot: usize) {
-        todo!()
+        let slot = i32::try_from(slot).expect(SLOT_FROM_USIZE_MSG);
+        let key_slot = i32::try_from(key_slot).expect(SLOT_FROM_USIZE_MSG);
+        let into_slot = i32::try_from(into_slot).expect(SLOT_FROM_USIZE_MSG);
+
+        unsafe { sys::wrenRemoveMapValue(self.0.as_ptr(), slot, key_slot, into_slot) };
     }
 
     /// Checks if the given `module` is loaded.

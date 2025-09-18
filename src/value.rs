@@ -3,12 +3,6 @@
 //! [`Wren`]: crate::Wren
 #![allow(private_interfaces)]
 
-use std::{
-    any::TypeId,
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-};
-
 use ::sealed::sealed;
 
 use crate::{
