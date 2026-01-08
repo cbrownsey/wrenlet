@@ -1,0 +1,10 @@
+[package]
+name = "wrenlet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+error_set = "0.9.1"
+
+sys = { path = "../wrenlet-sys", package = "wrenlet-sys" }
+wrenlet-macros = { path = "../wrenlet-macros" }

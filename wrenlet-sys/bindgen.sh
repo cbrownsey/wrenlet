@@ -1,0 +1,1 @@
+bindgen --allowlist-item="(W|w)ren.+" --default-enum-style=newtype --use-core wren/wren-0.4.0.h -o src/bindings.rs
