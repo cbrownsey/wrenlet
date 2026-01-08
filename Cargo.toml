@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "wrenlet",
+    "wrenlet-sys",
+    "wrenlet-macros"
+]
+resolver = "3"
